@@ -1,16 +1,55 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { Eye, Printer as PrinterIcon } from 'lucide-vue-next';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { Copy, Eye, Printer as PrinterIcon, Settings, TerminalSquare, ZoomIn, ZoomOut } from 'lucide-vue-next';
 import { t } from '../lib/i18n';
 import { printNow, printParams, printTemplate, selectPrintTemplate, state } from '../lib/store';
+import PrinterSettingsDialog from '../components/PrinterSettingsDialog.vue';
 
-// Display scale for the preview (px per mm) — large enough to judge layout accurately.
-const previewWidthPx = computed(() => (printTemplate.value?.media.widthMm ?? 40) * 12);
-
+const frameEl = ref<HTMLDivElement | null>(null);
 const previewUrl = ref('');
+const previewNatural = ref({ w: 0, h: 0 });
+const frameSize = ref({ w: 0, h: 0 });
+const previewZoom = ref<'fit' | number>('fit');
 const busy = ref(false);
 const msg = ref('');
+const printersOpen = ref(false);
+const curlOpen = ref(false);
+const curlCopied = ref(false);
 let debounce: ReturnType<typeof setTimeout> | undefined;
+let ro: ResizeObserver | undefined;
+
+const zoomSteps = [4, 6, 8, 10, 12, 16, 20, 24];
+const previewStyle = computed(() => {
+  const tmpl = printTemplate.value;
+  if (!tmpl) return {};
+  if (previewZoom.value !== 'fit') {
+    return { width: `${tmpl.media.widthMm * previewZoom.value}px` };
+  }
+  const pad = 36;
+  const availableW = Math.max(1, frameSize.value.w - pad);
+  const availableH = Math.max(1, frameSize.value.h - pad);
+  const naturalW = previewNatural.value.w || tmpl.media.widthMm * 8;
+  const naturalH = previewNatural.value.h || tmpl.media.heightMm * 8;
+  const scale = Math.max(0.1, Math.min(availableW / naturalW, availableH / naturalH));
+  return { width: `${Math.floor(naturalW * scale)}px` };
+});
+const zoomLabel = computed(() => (previewZoom.value === 'fit' ? t('print.zoomFit') : `${previewZoom.value}px/mm`));
+const curlCommand = computed(() => {
+  const body = {
+    templateId: state.printTemplateId,
+    values: state.printValues,
+    printerId: state.printPrinterId || undefined,
+    copies: state.printCopies,
+  };
+  const json = JSON.stringify(body, null, 2);
+  const origin = typeof window === 'undefined' ? 'http://localhost:5179' : window.location.origin;
+  return [
+    'curl -X POST',
+    shellQuote(`${origin}/api/print`),
+    "-H 'Content-Type: application/json'",
+    `--data ${shellQuote(json)}`,
+  ].join(' \\\n  ');
+});
 
 function paramLabel(k: string): string {
   const d = printTemplate.value?.params.find((p) => p.key === k);
@@ -21,6 +60,24 @@ function isMultiline(k: string): boolean {
 }
 function onSelect(e: Event): void {
   selectPrintTemplate((e.target as HTMLSelectElement).value);
+}
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+function onPreviewLoad(e: Event): void {
+  const img = e.target as HTMLImageElement;
+  previewNatural.value = { w: img.naturalWidth, h: img.naturalHeight };
+}
+function zoom(delta: number): void {
+  const current = previewZoom.value === 'fit' ? 8 : previewZoom.value;
+  const idx = Math.max(0, zoomSteps.findIndex((z) => z >= current));
+  const next = zoomSteps[Math.max(0, Math.min(zoomSteps.length - 1, idx + delta))] ?? 8;
+  previewZoom.value = next;
+}
+async function copyCurl(): Promise<void> {
+  await navigator.clipboard.writeText(curlCommand.value);
+  curlCopied.value = true;
+  setTimeout(() => (curlCopied.value = false), 1200);
 }
 
 async function refreshPreview(): Promise<void> {
@@ -37,6 +94,7 @@ async function refreshPreview(): Promise<void> {
     const blob = await res.blob();
     if (previewUrl.value) URL.revokeObjectURL(previewUrl.value);
     previewUrl.value = URL.createObjectURL(blob);
+    previewNatural.value = { w: 0, h: 0 };
   } catch (e) {
     msg.value = t('print.previewFailed', { message: (e as Error).message });
   } finally {
@@ -69,6 +127,14 @@ watch(
 );
 onBeforeUnmount(() => {
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value);
+  ro?.disconnect();
+});
+onMounted(() => {
+  ro = new ResizeObserver((entries) => {
+    const box = entries[0]?.contentRect;
+    if (box) frameSize.value = { w: box.width, h: box.height };
+  });
+  if (frameEl.value) ro.observe(frameEl.value);
 });
 </script>
 
@@ -106,6 +172,14 @@ onBeforeUnmount(() => {
         </label>
         <label>{{ t('print.copies') }} <input type="number" min="1" v-model.number="state.printCopies" /></label>
       </div>
+      <div class="secondary-actions">
+        <button type="button" class="ghost subtle" @click="printersOpen = true">
+          <Settings :size="14" /> {{ t('print.managePrinters') }}
+        </button>
+        <button type="button" class="ghost subtle" :disabled="!state.printTemplateId" @click="curlOpen = true">
+          <TerminalSquare :size="14" /> {{ t('print.showCurl') }}
+        </button>
+      </div>
 
       <div class="actions">
         <button :disabled="busy" @click="refreshPreview"><Eye :size="15" /> {{ t('print.refreshPreview') }}</button>
@@ -122,13 +196,43 @@ onBeforeUnmount(() => {
           <h2>{{ t('print.previewTitle') }}</h2>
           <p class="muted">{{ t('print.previewDescription') }}</p>
         </div>
-        <span v-if="busy" class="busy">{{ t('print.generating') }}</span>
+        <div class="preview-tools">
+          <span v-if="busy" class="busy">{{ t('print.generating') }}</span>
+          <button type="button" class="ghost mini" @click="previewZoom = 'fit'">{{ t('print.zoomFit') }}</button>
+          <button type="button" class="ghost icon-mini" :aria-label="t('print.zoomOut')" @click="zoom(-1)">
+            <ZoomOut :size="14" />
+          </button>
+          <span class="zoom mono">{{ zoomLabel }}</span>
+          <button type="button" class="ghost icon-mini" :aria-label="t('print.zoomIn')" @click="zoom(1)">
+            <ZoomIn :size="14" />
+          </button>
+        </div>
       </div>
-      <div class="frame">
-        <img v-if="previewUrl" :src="previewUrl" class="preview" :style="{ width: previewWidthPx + 'px' }" />
+      <div ref="frameEl" class="frame" :class="{ fit: previewZoom === 'fit', zoomed: previewZoom !== 'fit' }">
+        <img v-if="previewUrl" :src="previewUrl" class="preview" :style="previewStyle" @load="onPreviewLoad" />
         <span v-else class="muted ph">{{ t('print.previewPlaceholder') }}</span>
       </div>
     </section>
+
+    <PrinterSettingsDialog :open="printersOpen" @close="printersOpen = false" />
+
+    <div v-if="curlOpen" class="curl-overlay" @pointerdown.self="curlOpen = false">
+      <section class="curl-dialog" role="dialog" aria-modal="true" :aria-label="t('print.curlTitle')">
+        <header class="curl-head">
+          <div>
+            <h2>{{ t('print.curlTitle') }}</h2>
+            <p class="muted">{{ t('print.curlDescription') }}</p>
+          </div>
+          <button type="button" class="ghost" @click="curlOpen = false">{{ t('common.close') }}</button>
+        </header>
+        <pre class="curl mono">{{ curlCommand }}</pre>
+        <footer class="curl-actions">
+          <span v-if="curlCopied" class="muted">{{ t('print.copiedCurl') }}</span>
+          <div class="spacer"></div>
+          <button type="button" @click="copyCurl"><Copy :size="14" /> {{ t('print.copyCurl') }}</button>
+        </footer>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -209,6 +313,17 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 5px;
 }
+.secondary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.subtle {
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .msg {
   font-size: 11px;
   background: var(--panel-subtle);
@@ -243,12 +358,35 @@ onBeforeUnmount(() => {
   font-size: 12px;
   white-space: nowrap;
 }
+.preview-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.mini,
+.icon-mini {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.icon-mini {
+  width: 28px;
+  padding: 0;
+}
+.zoom {
+  min-width: 58px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+}
 /* Frame is intentionally a different colour from the label so the white paper edge
    is unambiguous — no white padding that could be mistaken for label margin. */
 .frame {
   flex: 1;
   min-height: 360px;
-  overflow: auto;
+  overflow: hidden;
   align-self: stretch;
   max-width: 100%;
   background:
@@ -260,12 +398,16 @@ onBeforeUnmount(() => {
   border-radius: var(--radius);
   padding: 18px;
   display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.frame.zoomed {
+  overflow: auto;
   align-items: flex-start;
   justify-content: flex-start;
 }
 .preview {
   display: block;
-  max-width: 100%;
   height: auto;
   image-rendering: pixelated;
   background: var(--paper);
@@ -279,6 +421,60 @@ onBeforeUnmount(() => {
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius);
 }
+.curl-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 82;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.46);
+}
+.curl-dialog {
+  width: min(780px, 94vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.34);
+  overflow: hidden;
+}
+.curl-head,
+.curl-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.curl-head {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+.curl-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.curl-head p {
+  margin: 4px 0 0;
+}
+.curl {
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: var(--field);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.curl-actions {
+  align-items: center;
+}
+.spacer {
+  flex: 1;
+}
 
 @media (max-width: 860px) {
   .print {
@@ -290,11 +486,17 @@ onBeforeUnmount(() => {
     order: -1;
     min-height: auto;
   }
+  .preview-head {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .preview-tools {
+    justify-content: flex-start;
+  }
   .frame {
     flex: none;
-    min-height: 0;
+    height: 370px;
     max-height: none;
-    overflow: visible;
   }
 }
 
