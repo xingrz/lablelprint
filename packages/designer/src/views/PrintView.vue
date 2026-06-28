@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Copy, Eye, Printer as PrinterIcon, Settings, TerminalSquare, ZoomIn, ZoomOut } from 'lucide-vue-next';
+import { Copy, Eye, Printer as PrinterIcon, Settings, TerminalSquare, X, ZoomIn, ZoomOut } from 'lucide-vue-next';
 import { t } from '../lib/i18n';
 import { printNow, printParams, printTemplate, selectPrintTemplate, state } from '../lib/store';
 import PrinterSettingsDialog from '../components/PrinterSettingsDialog.vue';
@@ -15,6 +15,8 @@ const msg = ref('');
 const printersOpen = ref(false);
 const curlOpen = ref(false);
 const curlCopied = ref(false);
+const selectedCurlOrigin = ref('');
+const customCurlOrigin = ref('');
 let debounce: ReturnType<typeof setTimeout> | undefined;
 let ro: ResizeObserver | undefined;
 
@@ -34,6 +36,23 @@ const previewStyle = computed(() => {
   return { width: `${Math.floor(naturalW * scale)}px` };
 });
 const zoomLabel = computed(() => (previewZoom.value === 'fit' ? t('print.zoomFit') : `${previewZoom.value}px/mm`));
+const curlHostOptions = computed(() => {
+  const current = currentOrigin();
+  const opts = [{ value: current, label: t('print.cliHostCurrent', { host: current }) }];
+  try {
+    const u = new URL(current);
+    const suffix = u.port ? `:${u.port}` : '';
+    const loopback = `${u.protocol}//127.0.0.1${suffix}`;
+    if (loopback !== current) opts.push({ value: loopback, label: t('print.cliHostLoopback', { host: loopback }) });
+  } catch {
+    // Keep the current-origin option only.
+  }
+  return opts;
+});
+const curlOrigin = computed(() => {
+  if (selectedCurlOrigin.value === '__custom') return normalizeOrigin(customCurlOrigin.value || currentOrigin());
+  return selectedCurlOrigin.value || currentOrigin();
+});
 const curlCommand = computed(() => {
   const body = {
     templateId: state.printTemplateId,
@@ -42,10 +61,9 @@ const curlCommand = computed(() => {
     copies: state.printCopies,
   };
   const json = JSON.stringify(body, null, 2);
-  const origin = typeof window === 'undefined' ? 'http://localhost:5179' : window.location.origin;
   return [
     'curl -X POST',
-    shellQuote(`${origin}/api/print`),
+    shellQuote(`${curlOrigin.value}/api/print`),
     "-H 'Content-Type: application/json'",
     `--data ${shellQuote(json)}`,
   ].join(' \\\n  ');
@@ -63,6 +81,16 @@ function onSelect(e: Event): void {
 }
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+function currentOrigin(): string {
+  return typeof window === 'undefined' ? 'http://localhost:5179' : window.location.origin;
+}
+function normalizeOrigin(input: string): string {
+  const trimmed = input.trim().replace(/\/+$/, '');
+  if (!trimmed) return currentOrigin();
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
+  const protocol = typeof window === 'undefined' ? 'http:' : window.location.protocol;
+  return `${protocol}//${trimmed}`;
 }
 function onPreviewLoad(e: Event): void {
   const img = e.target as HTMLImageElement;
@@ -130,6 +158,7 @@ onBeforeUnmount(() => {
   ro?.disconnect();
 });
 onMounted(() => {
+  selectedCurlOrigin.value = currentOrigin();
   ro = new ResizeObserver((entries) => {
     const box = entries[0]?.contentRect;
     if (box) frameSize.value = { w: box.width, h: box.height };
@@ -219,18 +248,37 @@ onMounted(() => {
     <div v-if="curlOpen" class="curl-overlay" @pointerdown.self="curlOpen = false">
       <section class="curl-dialog" role="dialog" aria-modal="true" :aria-label="t('print.curlTitle')">
         <header class="curl-head">
-          <div>
+          <div class="curl-title">
+            <TerminalSquare :size="18" :stroke-width="2" />
+            <div>
             <h2>{{ t('print.curlTitle') }}</h2>
             <p class="muted">{{ t('print.curlDescription') }}</p>
+            </div>
           </div>
-          <button type="button" class="ghost" @click="curlOpen = false">{{ t('common.close') }}</button>
+          <button type="button" class="ghost curl-close" :aria-label="t('common.close')" @click="curlOpen = false">
+            <X :size="17" />
+          </button>
         </header>
-        <pre class="curl mono">{{ curlCommand }}</pre>
-        <footer class="curl-actions">
-          <span v-if="curlCopied" class="muted">{{ t('print.copiedCurl') }}</span>
-          <div class="spacer"></div>
-          <button type="button" @click="copyCurl"><Copy :size="14" /> {{ t('print.copyCurl') }}</button>
-        </footer>
+        <div class="curl-options">
+          <label class="host-select">{{ t('print.cliHost') }}
+            <select v-model="selectedCurlOrigin">
+              <option v-for="opt in curlHostOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+              <option value="__custom">{{ t('print.cliHostCustom') }}</option>
+            </select>
+          </label>
+          <label v-if="selectedCurlOrigin === '__custom'" class="host-custom">{{ t('print.cliHostCustom') }}
+            <input v-model="customCurlOrigin" :placeholder="t('print.cliHostPlaceholder')" />
+          </label>
+        </div>
+        <section class="curl-code">
+          <header>
+            <span class="mono">curl</span>
+            <button type="button" class="ghost copy-code" @click="copyCurl">
+              <Copy :size="14" /> {{ curlCopied ? t('print.copiedCurl') : t('print.copyCurl') }}
+            </button>
+          </header>
+          <pre class="curl mono">{{ curlCommand }}</pre>
+        </section>
       </section>
     </div>
   </div>
@@ -432,7 +480,7 @@ onMounted(() => {
   background: rgba(15, 23, 42, 0.46);
 }
 .curl-dialog {
-  width: min(780px, 94vw);
+  width: min(760px, 94vw);
   max-height: 90vh;
   display: flex;
   flex-direction: column;
@@ -442,16 +490,30 @@ onMounted(() => {
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.34);
   overflow: hidden;
 }
-.curl-head,
-.curl-actions {
+.curl-head {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 14px 16px;
-}
-.curl-head {
   justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 13px;
   border-bottom: 1px solid var(--border);
+}
+.curl-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.curl-title > svg {
+  margin-top: 2px;
+  color: var(--accent);
+  flex: none;
+}
+.curl-close {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  flex: none;
 }
 .curl-head h2 {
   margin: 0;
@@ -460,20 +522,49 @@ onMounted(() => {
 .curl-head p {
   margin: 4px 0 0;
 }
+.curl-options {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-subtle);
+}
+.host-select,
+.host-custom {
+  min-width: 0;
+}
+.curl-code {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--field);
+}
+.curl-code header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.copy-code {
+  margin-left: auto;
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--text-soft);
+}
 .curl {
   margin: 0;
   padding: 16px;
+  flex: 1;
+  min-height: 180px;
+  max-height: 48vh;
   overflow: auto;
   white-space: pre-wrap;
-  background: var(--field);
-  border-bottom: 1px solid var(--border);
+  background: transparent;
   font-size: 12px;
-}
-.curl-actions {
-  align-items: center;
-}
-.spacer {
-  flex: 1;
 }
 
 @media (max-width: 860px) {
@@ -509,6 +600,15 @@ onMounted(() => {
   }
   .grid2 {
     grid-template-columns: 1fr;
+  }
+  .curl-overlay {
+    padding: 10px;
+  }
+  .curl-options {
+    grid-template-columns: 1fr;
+  }
+  .curl {
+    max-height: 52vh;
   }
 }
 </style>
