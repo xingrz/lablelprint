@@ -35,6 +35,7 @@ interface UsbOutTransferResultLike {
 interface UsbDeviceLike {
   productName?: string;
   manufacturerName?: string;
+  serialNumber?: string;
   vendorId: number;
   productId: number;
   opened: boolean;
@@ -58,6 +59,7 @@ interface UsbDeviceFilterLike {
 
 interface UsbNavigatorLike extends Navigator {
   usb?: {
+    getDevices(): Promise<UsbDeviceLike[]>;
     requestDevice(options: { filters: UsbDeviceFilterLike[] }): Promise<UsbDeviceLike>;
   };
 }
@@ -69,8 +71,16 @@ export interface WebUsbSendResult {
 
 export interface WebUsbPrinterConnection {
   deviceName: string;
+  deviceInfo: WebUsbDeviceInfo;
+  reused: boolean;
   write(data: Uint8Array): Promise<WebUsbSendResult>;
   close(): Promise<void>;
+}
+
+export interface WebUsbDeviceInfo {
+  vendorId: number;
+  productId: number;
+  serialNumber?: string;
 }
 
 interface EndpointChoice {
@@ -86,7 +96,9 @@ export async function connectTsplWebUsb(target: PrintTargetConfig): Promise<WebU
   const nav = navigator as UsbNavigatorLike;
   if (!nav.usb) throw new Error(t('print.webUsbUnsupported'));
 
-  const device = await nav.usb.requestDevice({ filters: usbFilters(target) });
+  const authorizedDevice = findAuthorizedDevice(await nav.usb.getDevices(), target);
+  const device = authorizedDevice ?? (await nav.usb.requestDevice({ filters: usbFilters(target) }));
+  const reused = !!authorizedDevice;
   let claimedInterface: number | null = null;
   let closed = false;
 
@@ -109,6 +121,8 @@ export async function connectTsplWebUsb(target: PrintTargetConfig): Promise<WebU
     const deviceName = device.productName || device.manufacturerName || t('print.webUsbDevice');
     return {
       deviceName,
+      deviceInfo: deviceInfo(device),
+      reused,
       async write(data: Uint8Array): Promise<WebUsbSendResult> {
         await writeChunks(device, choice.endpointNumber, data, clampInt(target.webUsbChunkSize, 64, 65536, 16384));
         return { deviceName, bytes: data.byteLength };
@@ -134,6 +148,41 @@ function usbFilters(target: PrintTargetConfig): UsbDeviceFilterLike[] {
     return [filter];
   }
   return [{ classCode: clampInt(target.webUsbClassCode, 0, 255, USB_PRINTER_CLASS) }];
+}
+
+function findAuthorizedDevice(devices: UsbDeviceLike[], target: PrintTargetConfig): UsbDeviceLike | null {
+  const matches = devices.filter((device) => deviceMatchesTarget(device, target));
+  if (target.webUsbSerialNumber) {
+    return matches.find((device) => device.serialNumber === target.webUsbSerialNumber) ?? null;
+  }
+  return matches[0] ?? null;
+}
+
+function deviceMatchesTarget(device: UsbDeviceLike, target: PrintTargetConfig): boolean {
+  if (isFiniteInt(target.webUsbVendorId) && device.vendorId !== target.webUsbVendorId) return false;
+  if (isFiniteInt(target.webUsbProductId) && device.productId !== target.webUsbProductId) return false;
+  if (target.webUsbSerialNumber && device.serialNumber !== target.webUsbSerialNumber) return false;
+  return isFiniteInt(target.webUsbVendorId) || hasCompatibleClass(device, target);
+}
+
+function hasCompatibleClass(device: UsbDeviceLike, target: PrintTargetConfig): boolean {
+  const preferredClass = isFiniteInt(target.webUsbClassCode) ? target.webUsbClassCode : USB_PRINTER_CLASS;
+  for (const config of device.configurations) {
+    for (const iface of config.interfaces) {
+      for (const alt of iface.alternates) {
+        if (alt.interfaceClass === preferredClass) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function deviceInfo(device: UsbDeviceLike): WebUsbDeviceInfo {
+  return {
+    vendorId: device.vendorId,
+    productId: device.productId,
+    serialNumber: device.serialNumber,
+  };
 }
 
 function chooseOutEndpoint(device: UsbDeviceLike, target: PrintTargetConfig): EndpointChoice | null {

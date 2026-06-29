@@ -98,6 +98,7 @@ function normalizeTarget(): PrintTargetConfig {
   if (p.delivery === 'web-usb') {
     target.webUsbVendorId = optionalInt(p.webUsbVendorId, 0, 0xffff);
     target.webUsbProductId = optionalInt(p.webUsbProductId, 0, 0xffff);
+    target.webUsbSerialNumber = p.webUsbSerialNumber?.trim() || undefined;
     target.webUsbClassCode = optionalInt(p.webUsbClassCode, 0, 0xff) ?? 0x07;
     target.webUsbInterfaceNumber = optionalInt(p.webUsbInterfaceNumber, 0, 255);
     target.webUsbAlternateSetting = optionalInt(p.webUsbAlternateSetting, 0, 255);
@@ -437,6 +438,9 @@ watch(
               </label>
               <label>{{ t('targets.webUsbProductId') }}
                 <input type="number" min="0" max="65535" step="1" v-model.number="draft.webUsbProductId" />
+              </label>
+              <label>{{ t('targets.webUsbSerialNumber') }}
+                <input v-model="draft.webUsbSerialNumber" />
               </label>
               <label>{{ t('targets.webUsbInterfaceNumber') }}
                 <input type="number" min="0" max="255" step="1" v-model.number="draft.webUsbInterfaceNumber" />

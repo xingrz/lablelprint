@@ -206,6 +206,7 @@ export interface PrintTargetConfig {
   /** web-usb: optional chooser filter and writable OUT endpoint override. */
   webUsbVendorId?: number;
   webUsbProductId?: number;
+  webUsbSerialNumber?: string;
   webUsbClassCode?: number;
   webUsbInterfaceNumber?: number;
   webUsbAlternateSetting?: number;

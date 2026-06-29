@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Copy, Eye, Maximize2, Printer as PrinterIcon, Settings, TerminalSquare, X, ZoomIn, ZoomOut } from 'lucide-vue-next';
 import type { PrintTargetConfig } from '@labelprint/shared';
 import { t } from '../lib/i18n';
-import { printNow, printParams, printTemplate, selectPrintTemplate, state } from '../lib/store';
+import { printNow, printParams, printTemplate, saveTarget, selectPrintTemplate, state } from '../lib/store';
 import { makeImagePdfBlob, pdfFileName } from '../lib/pdf';
 import { connectTsplWebBluetooth } from '../lib/webBluetooth';
 import { connectTsplWebUsb } from '../lib/webUsb';
@@ -285,10 +285,30 @@ async function printWebUsbTspl(target: PrintTargetConfig): Promise<void> {
     const res = await requestRenderedJob(target);
     const job = new Uint8Array(await res.arrayBuffer());
     const sent = await connection.write(job);
+    await rememberWebUsbDevice(target, connection.deviceInfo);
     state.status = t('status.webUsbSent', { target: target.name, bytes: sent.bytes, device: sent.deviceName });
   } finally {
     await connection.close();
   }
+}
+
+async function rememberWebUsbDevice(
+  target: PrintTargetConfig,
+  info: { vendorId: number; productId: number; serialNumber?: string },
+): Promise<void> {
+  if (
+    target.webUsbVendorId === info.vendorId &&
+    target.webUsbProductId === info.productId &&
+    target.webUsbSerialNumber === info.serialNumber
+  ) {
+    return;
+  }
+  await saveTarget({
+    ...target,
+    webUsbVendorId: info.vendorId,
+    webUsbProductId: info.productId,
+    webUsbSerialNumber: info.serialNumber,
+  });
 }
 
 function htmlEscape(s: string): string {
