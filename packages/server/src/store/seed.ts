@@ -75,7 +75,7 @@ export function seedTargets(): PrintTargetConfig[] {
       bleServiceUuid: '0xff00',
       bleCharacteristicUuid: '0xff02',
       bleChunkSize: 20,
-      bleChunkDelayMs: 20,
+      bleChunkDelayMs: 2,
       bleWriteMode: 'without-response',
     },
     {

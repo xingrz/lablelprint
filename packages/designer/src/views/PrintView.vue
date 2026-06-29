@@ -6,7 +6,7 @@ import { t } from '../lib/i18n';
 import { loadHistory, printNow, printParams, printTemplate, saveTarget, selectPrintTemplate, state } from '../lib/store';
 import { api } from '../lib/api';
 import { makeImagePdfBlob, pdfFileName } from '../lib/pdf';
-import { connectTsplWebBluetooth } from '../lib/webBluetooth';
+import { connectTsplWebBluetooth, type WebBluetoothSendProgress } from '../lib/webBluetooth';
 import { connectTsplWebUsb } from '../lib/webUsb';
 import TargetSettingsDialog from '../components/TargetSettingsDialog.vue';
 import IconButton from '../components/IconButton.vue';
@@ -20,6 +20,7 @@ const frameSize = ref({ w: 0, h: 0 });
 const previewZoom = ref<'fit' | number>('fit');
 const busy = ref(false);
 const msg = ref('');
+const bluetoothProgress = ref<WebBluetoothSendProgress | null>(null);
 const targetsOpen = ref(false);
 const curlOpen = ref(false);
 const curlCopied = ref(false);
@@ -55,6 +56,16 @@ const previewStyle = computed(() => {
   return { width: `${Math.floor(naturalW * scale)}px` };
 });
 const zoomLabel = computed(() => (previewZoom.value === 'fit' ? t('print.zoomFit') : `${previewZoom.value}px/mm`));
+const bluetoothProgressPercent = computed(() => {
+  const p = bluetoothProgress.value;
+  if (!p?.totalBytes) return 0;
+  return Math.max(0, Math.min(100, Math.round((p.sentBytes / p.totalBytes) * 100)));
+});
+const bluetoothProgressLabel = computed(() => {
+  const p = bluetoothProgress.value;
+  if (!p) return '';
+  return t('print.bluetoothProgress', { sent: p.sentBytes, total: p.totalBytes });
+});
 const selectedTarget = computed<PrintTargetConfig | null>(
   () => state.targets.find((p) => p.id === state.printTargetId) ?? state.targets[0] ?? null,
 );
@@ -275,7 +286,11 @@ async function printWebBluetoothTspl(target: PrintTargetConfig): Promise<void> {
   try {
     const res = await requestRenderedJob(target);
     const job = new Uint8Array(await res.arrayBuffer());
-    const sent = await connection.write(job);
+    const sent = await connection.write(job, (progress) => {
+      bluetoothProgress.value = progress;
+      msg.value = t('print.bluetoothProgress', { sent: progress.sentBytes, total: progress.totalBytes });
+    });
+    await rememberWebBluetoothDevice(target, connection.deviceInfo);
     state.status = t('status.bluetoothSent', { target: target.name, bytes: sent.bytes, device: sent.deviceName });
     await recordClientPrint(target, { bytes: sent.bytes });
   } finally {
@@ -305,6 +320,19 @@ async function recordClientPrint(target: PrintTargetConfig, opts: { bytes?: numb
   } catch (e) {
     console.warn('Failed to record browser-managed print', e);
   }
+}
+
+async function rememberWebBluetoothDevice(
+  target: PrintTargetConfig,
+  info: { id?: string; name?: string },
+): Promise<void> {
+  if (!info.id) return;
+  if (target.bleDeviceId === info.id && target.bleDeviceName === info.name) return;
+  await saveTarget({
+    ...target,
+    bleDeviceId: info.id,
+    bleDeviceName: info.name,
+  });
 }
 
 async function rememberWebUsbDevice(
@@ -397,6 +425,7 @@ img { display: block; width: 100%; height: 100%; object-fit: fill; }
 async function doPrint(): Promise<void> {
   busy.value = true;
   msg.value = '';
+  bluetoothProgress.value = null;
   try {
     const target = selectedTarget.value;
     if (!target) throw new Error(t('error.noTargetSelected'));
@@ -508,6 +537,12 @@ onMounted(() => {
         </div>
         <div class="preview-tools">
           <span v-if="busy" class="busy">{{ t('print.generating') }}</span>
+          <div v-if="bluetoothProgress" class="send-progress" role="status" :aria-label="bluetoothProgressLabel">
+            <span class="mono">{{ bluetoothProgressLabel }}</span>
+            <span class="progress-track">
+              <span class="progress-fill" :style="{ width: `${bluetoothProgressPercent}%` }"></span>
+            </span>
+          </div>
           <div class="command-group">
             <IconButton :icon="ZoomOut" :label="t('print.zoomOut')" @click="zoom(-1)" />
             <span class="zoom mono">{{ zoomLabel }}</span>
@@ -717,6 +752,27 @@ onMounted(() => {
   justify-content: flex-end;
   gap: 6px;
   flex-wrap: wrap;
+}
+.send-progress {
+  width: 210px;
+  display: grid;
+  gap: 4px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+.progress-track {
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  background: var(--panel-subtle);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
 }
 .command-group {
   display: inline-flex;

@@ -26,14 +26,21 @@ interface BluetoothServerLike {
 }
 
 interface BluetoothDeviceLike {
+  id?: string;
   name?: string;
   gatt?: BluetoothServerLike;
 }
 
 interface BluetoothNavigatorLike extends Navigator {
   bluetooth?: {
+    getDevices?: () => Promise<BluetoothDeviceLike[]>;
     requestDevice(options: RequestDeviceOptionsLike): Promise<BluetoothDeviceLike>;
   };
+}
+
+export interface WebBluetoothDeviceInfo {
+  id?: string;
+  name?: string;
 }
 
 export interface WebBluetoothSendResult {
@@ -41,9 +48,18 @@ export interface WebBluetoothSendResult {
   bytes: number;
 }
 
+export interface WebBluetoothSendProgress {
+  sentBytes: number;
+  totalBytes: number;
+  chunkIndex: number;
+  totalChunks: number;
+}
+
 export interface WebBluetoothPrinterConnection {
   deviceName: string;
-  write(data: Uint8Array): Promise<WebBluetoothSendResult>;
+  deviceInfo: WebBluetoothDeviceInfo;
+  reused: boolean;
+  write(data: Uint8Array, onProgress?: (progress: WebBluetoothSendProgress) => void): Promise<WebBluetoothSendResult>;
   close(): void;
 }
 
@@ -60,7 +76,9 @@ export async function connectTsplWebBluetooth(target: PrintTargetConfig): Promis
     ? { filters: [{ namePrefix }], optionalServices: [serviceUuid] }
     : { acceptAllDevices: true, optionalServices: [serviceUuid] };
 
-  const device = await nav.bluetooth.requestDevice(options);
+  const authorizedDevice = await findAuthorizedDevice(nav, target);
+  const device = authorizedDevice ?? (await nav.bluetooth.requestDevice(options));
+  const reused = !!authorizedDevice;
   if (!device.gatt) throw new Error(t('print.bluetoothGattUnavailable'));
 
   const server = await device.gatt.connect();
@@ -70,11 +88,16 @@ export async function connectTsplWebBluetooth(target: PrintTargetConfig): Promis
     const deviceName = device.name || t('print.bluetoothDevice');
     return {
       deviceName,
-      async write(data: Uint8Array): Promise<WebBluetoothSendResult> {
+      deviceInfo: { id: device.id, name: device.name },
+      reused,
+      async write(
+        data: Uint8Array,
+        onProgress?: (progress: WebBluetoothSendProgress) => void,
+      ): Promise<WebBluetoothSendResult> {
         const chunkSize = clampInt(target.bleChunkSize, 20, 512, 20);
-        const chunkDelayMs = clampInt(target.bleChunkDelayMs, 0, 1000, 20);
+        const chunkDelayMs = clampInt(target.bleChunkDelayMs, 0, 1000, 2);
         const mode = target.bleWriteMode ?? 'without-response';
-        await writeChunks(characteristic, data, { chunkSize, chunkDelayMs, mode });
+        await writeChunks(characteristic, data, { chunkSize, chunkDelayMs, mode, onProgress });
         await sleep(120);
         return { deviceName, bytes: data.byteLength };
       },
@@ -86,6 +109,15 @@ export async function connectTsplWebBluetooth(target: PrintTargetConfig): Promis
     server.disconnect?.();
     throw e;
   }
+}
+
+async function findAuthorizedDevice(
+  nav: BluetoothNavigatorLike,
+  target: PrintTargetConfig,
+): Promise<BluetoothDeviceLike | null> {
+  if (!target.bleDeviceId || !nav.bluetooth?.getDevices) return null;
+  const devices = await nav.bluetooth.getDevices();
+  return devices.find((device) => device.id === target.bleDeviceId) ?? null;
 }
 
 function parseBluetoothUuid(raw: string | undefined): BluetoothUuid | null {
@@ -105,11 +137,25 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 async function writeChunks(
   characteristic: BluetoothCharacteristicLike,
   data: Uint8Array,
-  opts: { chunkSize: number; chunkDelayMs: number; mode: 'with-response' | 'without-response' },
+  opts: {
+    chunkSize: number;
+    chunkDelayMs: number;
+    mode: 'with-response' | 'without-response';
+    onProgress?: (progress: WebBluetoothSendProgress) => void;
+  },
 ): Promise<void> {
+  const totalChunks = Math.max(1, Math.ceil(data.byteLength / opts.chunkSize));
+  let chunkIndex = 0;
   for (let offset = 0; offset < data.byteLength; offset += opts.chunkSize) {
     const chunk = data.subarray(offset, offset + opts.chunkSize);
     await writeChunk(characteristic, chunk, opts.mode);
+    chunkIndex += 1;
+    opts.onProgress?.({
+      sentBytes: Math.min(data.byteLength, offset + chunk.byteLength),
+      totalBytes: data.byteLength,
+      chunkIndex,
+      totalChunks,
+    });
     if (opts.chunkDelayMs > 0) await sleep(opts.chunkDelayMs);
   }
 }

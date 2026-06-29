@@ -89,11 +89,13 @@ function normalizeTarget(): PrintTargetConfig {
     target.port = Number(p.port) || 9100;
   }
   if (p.delivery === 'web-bluetooth') {
+    target.bleDeviceId = p.bleDeviceId;
+    target.bleDeviceName = p.bleDeviceName;
     target.bleNamePrefix = p.bleNamePrefix?.trim();
     target.bleServiceUuid = p.bleServiceUuid?.trim();
     target.bleCharacteristicUuid = p.bleCharacteristicUuid?.trim();
     target.bleChunkSize = clamp(Number(p.bleChunkSize), 20, 512, 20);
-    target.bleChunkDelayMs = clamp(Number(p.bleChunkDelayMs), 0, 1000, 20);
+    target.bleChunkDelayMs = clamp(Number(p.bleChunkDelayMs), 0, 1000, 2);
     target.bleWriteMode = p.bleWriteMode === 'with-response' ? 'with-response' : 'without-response';
   }
   if (p.delivery === 'web-usb') {
@@ -149,7 +151,7 @@ function applyPreset(preset: TargetPreset): void {
     next.bleServiceUuid ??= '0xff00';
     next.bleCharacteristicUuid ??= '0xff02';
     next.bleChunkSize ??= 20;
-    next.bleChunkDelayMs ??= 20;
+    next.bleChunkDelayMs ??= 2;
     next.bleWriteMode ??= 'without-response';
   }
   if (next.delivery === 'web-usb') {
