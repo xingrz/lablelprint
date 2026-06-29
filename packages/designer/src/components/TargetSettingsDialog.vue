@@ -17,7 +17,15 @@ const draggingId = ref('');
 const dragOverId = ref('');
 const dragSnapshot = ref<PrintTargetConfig[]>([]);
 
-type TargetPreset = 'pdf-download' | 'browser-print' | 'tspl-download' | 'web-bluetooth' | 'cups' | 'usb' | 'network';
+type TargetPreset =
+  | 'pdf-download'
+  | 'browser-print'
+  | 'tspl-download'
+  | 'web-bluetooth'
+  | 'web-usb'
+  | 'cups'
+  | 'usb'
+  | 'network';
 
 const selectedTarget = computed(() => state.targets.find((p) => p.id === selectedId.value) ?? null);
 const usesTsplSettings = computed(() => draft.value.format === 'tspl-bitmap');
@@ -84,6 +92,15 @@ function normalizeTarget(): PrintTargetConfig {
     target.bleChunkSize = clamp(Number(p.bleChunkSize), 20, 512, 20);
     target.bleWriteMode = p.bleWriteMode === 'with-response' ? 'with-response' : 'without-response';
   }
+  if (p.delivery === 'web-usb') {
+    target.webUsbVendorId = optionalInt(p.webUsbVendorId, 0, 0xffff);
+    target.webUsbProductId = optionalInt(p.webUsbProductId, 0, 0xffff);
+    target.webUsbClassCode = optionalInt(p.webUsbClassCode, 0, 0xff) ?? 0x07;
+    target.webUsbInterfaceNumber = optionalInt(p.webUsbInterfaceNumber, 0, 255);
+    target.webUsbAlternateSetting = optionalInt(p.webUsbAlternateSetting, 0, 255);
+    target.webUsbEndpointNumber = optionalInt(p.webUsbEndpointNumber, 1, 15);
+    target.webUsbChunkSize = clamp(Number(p.webUsbChunkSize), 64, 65536, 16384);
+  }
   return target;
 }
 
@@ -92,11 +109,19 @@ function clamp(v: number, min: number, max: number, fallback: number): number {
   return Math.max(min, Math.min(max, Math.round(v)));
 }
 
+function optionalInt(v: unknown, min: number, max: number): number | undefined {
+  if (v == null || v === '') return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
 function presetFor(target: Pick<PrintTargetConfig, 'format' | 'delivery'>): TargetPreset {
   if (target.format === 'pdf' && target.delivery === 'download') return 'pdf-download';
   if (target.format === 'browser-print-page') return 'browser-print';
   if (target.format === 'tspl-bitmap' && target.delivery === 'download') return 'tspl-download';
   if (target.format === 'tspl-bitmap' && target.delivery === 'web-bluetooth') return 'web-bluetooth';
+  if (target.format === 'tspl-bitmap' && target.delivery === 'web-usb') return 'web-usb';
   if (target.delivery === 'usb') return 'usb';
   if (target.delivery === 'cups') return 'cups';
   return 'network';
@@ -116,6 +141,10 @@ function applyPreset(preset: TargetPreset): void {
     next.bleChunkSize ??= 20;
     next.bleWriteMode ??= 'without-response';
   }
+  if (next.delivery === 'web-usb') {
+    next.webUsbClassCode ??= 0x07;
+    next.webUsbChunkSize ??= 16384;
+  }
   draft.value = next;
 }
 
@@ -124,6 +153,7 @@ function presetFormatDelivery(preset: TargetPreset): { format: PrintJobFormat; d
   if (preset === 'browser-print') return { format: 'browser-print-page', delivery: 'browser-dialog' };
   if (preset === 'tspl-download') return { format: 'tspl-bitmap', delivery: 'download' };
   if (preset === 'web-bluetooth') return { format: 'tspl-bitmap', delivery: 'web-bluetooth' };
+  if (preset === 'web-usb') return { format: 'tspl-bitmap', delivery: 'web-usb' };
   if (preset === 'usb') return { format: 'tspl-bitmap', delivery: 'usb' };
   if (preset === 'cups') return { format: 'tspl-bitmap', delivery: 'cups' };
   return { format: 'tspl-bitmap', delivery: 'network' };
@@ -138,6 +168,7 @@ function targetTypeText(preset: TargetPreset): string {
   if (preset === 'browser-print') return t('targetTypes.browserPrint');
   if (preset === 'tspl-download') return t('targetTypes.tsplDownload');
   if (preset === 'web-bluetooth') return t('targetTypes.webBluetooth');
+  if (preset === 'web-usb') return t('targetTypes.webUsb');
   if (preset === 'usb') return t('targetTypes.usb');
   if (preset === 'cups') return t('targetTypes.cups');
   return t('targetTypes.network');
@@ -308,6 +339,7 @@ watch(
                 <option value="browser-print">{{ t('targetTypes.browserPrint') }}</option>
                 <option value="tspl-download">{{ t('targetTypes.tsplDownload') }}</option>
                 <option value="web-bluetooth">{{ t('targetTypes.webBluetooth') }}</option>
+                <option value="web-usb">{{ t('targetTypes.webUsb') }}</option>
                 <option value="cups">{{ t('targetTypes.cups') }}</option>
                 <option value="usb">{{ t('targetTypes.usb') }}</option>
                 <option value="network">{{ t('targetTypes.network') }}</option>
@@ -321,6 +353,7 @@ watch(
           <p v-if="!usesTsplSettings" class="client-note">{{ t('targets.browserTargetNote') }}</p>
           <p v-else-if="draft.delivery === 'download'" class="client-note">{{ t('targets.tsplDownloadNote') }}</p>
           <p v-else-if="draft.delivery === 'web-bluetooth'" class="client-note">{{ t('targets.webBluetoothNote') }}</p>
+          <p v-else-if="draft.delivery === 'web-usb'" class="client-note">{{ t('targets.webUsbNote') }}</p>
 
           <div v-if="usesTsplSettings" class="grid3">
             <label>{{ t('targets.density') }}
@@ -375,6 +408,29 @@ watch(
                   <option value="without-response">{{ t('targets.bleWithoutResponse') }}</option>
                   <option value="with-response">{{ t('targets.bleWithResponse') }}</option>
                 </select>
+              </label>
+            </template>
+            <template v-if="draft.delivery === 'web-usb'">
+              <label>{{ t('targets.webUsbClassCode') }}
+                <input type="number" min="0" max="255" step="1" v-model.number="draft.webUsbClassCode" placeholder="7" />
+              </label>
+              <label>{{ t('targets.webUsbVendorId') }}
+                <input type="number" min="0" max="65535" step="1" v-model.number="draft.webUsbVendorId" />
+              </label>
+              <label>{{ t('targets.webUsbProductId') }}
+                <input type="number" min="0" max="65535" step="1" v-model.number="draft.webUsbProductId" />
+              </label>
+              <label>{{ t('targets.webUsbInterfaceNumber') }}
+                <input type="number" min="0" max="255" step="1" v-model.number="draft.webUsbInterfaceNumber" />
+              </label>
+              <label>{{ t('targets.webUsbAlternateSetting') }}
+                <input type="number" min="0" max="255" step="1" v-model.number="draft.webUsbAlternateSetting" />
+              </label>
+              <label>{{ t('targets.webUsbEndpointNumber') }}
+                <input type="number" min="1" max="15" step="1" v-model.number="draft.webUsbEndpointNumber" />
+              </label>
+              <label>{{ t('targets.webUsbChunkSize') }}
+                <input type="number" min="64" max="65536" step="64" v-model.number="draft.webUsbChunkSize" />
               </label>
             </template>
           </div>

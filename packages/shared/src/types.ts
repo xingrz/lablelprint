@@ -99,7 +99,14 @@ export type LabelElement =
 export type MediaType = 'continuous' | 'gap' | 'blackmark';
 export type PrintProtocol = 'tspl-bitmap';
 export type PrintJobFormat = 'pdf' | 'browser-print-page' | PrintProtocol;
-export type PrintDelivery = 'download' | 'browser-dialog' | 'web-bluetooth' | 'cups' | 'usb' | 'network';
+export type PrintDelivery =
+  | 'download'
+  | 'browser-dialog'
+  | 'web-bluetooth'
+  | 'web-usb'
+  | 'cups'
+  | 'usb'
+  | 'network';
 
 /** Snapshot of media geometry embedded in a template (so a template is self-contained). */
 export interface MediaRef {
@@ -186,6 +193,14 @@ export interface PrintTargetConfig {
   bleCharacteristicUuid?: string;
   bleChunkSize?: number;
   bleWriteMode?: 'with-response' | 'without-response';
+  /** web-usb: optional chooser filter and writable OUT endpoint override. */
+  webUsbVendorId?: number;
+  webUsbProductId?: number;
+  webUsbClassCode?: number;
+  webUsbInterfaceNumber?: number;
+  webUsbAlternateSetting?: number;
+  webUsbEndpointNumber?: number;
+  webUsbChunkSize?: number;
 }
 
 /** Request body for printing: which template, parameter values, copies, optional overrides. */

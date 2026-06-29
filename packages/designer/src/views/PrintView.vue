@@ -6,6 +6,7 @@ import { t } from '../lib/i18n';
 import { printNow, printParams, printTemplate, selectPrintTemplate, state } from '../lib/store';
 import { makeImagePdfBlob, pdfFileName } from '../lib/pdf';
 import { connectTsplWebBluetooth } from '../lib/webBluetooth';
+import { connectTsplWebUsb } from '../lib/webUsb';
 import TargetSettingsDialog from '../components/TargetSettingsDialog.vue';
 import IconButton from '../components/IconButton.vue';
 
@@ -94,7 +95,12 @@ function isMultiline(k: string): boolean {
   return !!printTemplate.value?.params.find((p) => p.key === k)?.multiline;
 }
 function isClientTarget(target: PrintTargetConfig | null | undefined): boolean {
-  return target?.delivery === 'download' || target?.delivery === 'browser-dialog' || target?.delivery === 'web-bluetooth';
+  return (
+    target?.delivery === 'download' ||
+    target?.delivery === 'browser-dialog' ||
+    target?.delivery === 'web-bluetooth' ||
+    target?.delivery === 'web-usb'
+  );
 }
 function onSelect(e: Event): void {
   selectPrintTemplate((e.target as HTMLSelectElement).value);
@@ -273,6 +279,18 @@ async function printWebBluetoothTspl(target: PrintTargetConfig): Promise<void> {
   }
 }
 
+async function printWebUsbTspl(target: PrintTargetConfig): Promise<void> {
+  const connection = await connectTsplWebUsb(target);
+  try {
+    const res = await requestRenderedJob(target);
+    const job = new Uint8Array(await res.arrayBuffer());
+    const sent = await connection.write(job);
+    state.status = t('status.webUsbSent', { target: target.name, bytes: sent.bytes, device: sent.deviceName });
+  } finally {
+    await connection.close();
+  }
+}
+
 function htmlEscape(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -350,6 +368,7 @@ async function doPrint(): Promise<void> {
     else if (target.format === 'browser-print-page') await openBrowserPrint(target);
     else if (target.format === 'tspl-bitmap' && target.delivery === 'download') await downloadTspl(target);
     else if (target.format === 'tspl-bitmap' && target.delivery === 'web-bluetooth') await printWebBluetoothTspl(target);
+    else if (target.format === 'tspl-bitmap' && target.delivery === 'web-usb') await printWebUsbTspl(target);
     else await printNow();
     msg.value = state.status;
   } catch (e) {

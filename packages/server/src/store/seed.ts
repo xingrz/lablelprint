@@ -75,6 +75,18 @@ export function seedTargets(): PrintTargetConfig[] {
       bleWriteMode: 'without-response',
     },
     {
+      id: 'target_web_usb',
+      name: 'WebUSB TSPL',
+      format: 'tspl-bitmap',
+      delivery: 'web-usb',
+      dpi: 203,
+      density: 10,
+      speed: 4,
+      direction: 1,
+      webUsbClassCode: 0x07,
+      webUsbChunkSize: 16384,
+    },
+    {
       id: 'target_cups',
       name: 'CUPS raw queue (tspl_raw)',
       format: 'tspl-bitmap',

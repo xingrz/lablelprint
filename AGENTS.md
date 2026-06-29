@@ -54,8 +54,8 @@ use this file as an index and policy record rather than a duplicate spec.
   unless there is an explicit compatibility reason to split them.
 - Template documents own label geometry and feed-positioning mode. Print targets
   combine an output format (`pdf`, `browser-print-page`, `tspl-bitmap`) with a
-  delivery method (`download`, `browser-dialog`, `web-bluetooth`, `cups`, `usb`,
-  `network`).
+  delivery method (`download`, `browser-dialog`, `web-bluetooth`, `web-usb`,
+  `cups`, `usb`, `network`).
   Check `types.ts`, `PrintView.vue`, `pipeline.ts`, target UI, and README
   together when changing this split.
 - Paper canvases and label previews should remain white in dark mode.
@@ -74,14 +74,16 @@ pipeline. New protocol work usually needs changes in:
 - `packages/designer/src/components/TargetSettingsDialog.vue` if users can
   select or configure it.
 
-Browser print, PDF download, TSPL download, and Web Bluetooth TSPL are
-browser-managed print targets. PDF download uses
+Browser print, PDF download, TSPL download, Web Bluetooth TSPL, and WebUSB TSPL
+are browser-managed print targets. PDF download uses
 `packages/designer/src/lib/pdf.ts`; browser print creates a print-formatted
 iframe in `PrintView.vue` and calls `window.print()`; TSPL download uses the
 target/template render-job endpoint and downloads the returned bytes; Web
 Bluetooth TSPL uses `packages/designer/src/lib/webBluetooth.ts` to write those
-bytes to a configured GATT characteristic. Normal web pages cannot reliably
-choose a physical device or silently print, so keep that UX explicit.
+bytes to a configured GATT characteristic; WebUSB TSPL uses
+`packages/designer/src/lib/webUsb.ts` to write those bytes to a USB OUT endpoint.
+Normal web pages cannot reliably choose a physical device or silently print, so
+keep that UX explicit.
 
 The public print API is resource-oriented:
 
